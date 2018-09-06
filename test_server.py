@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 import numpy as np
 from flask_cors import CORS
 # import neuralgym as ng
-from PIL import Image
+from PIL import Image, ImageDraw
 import tensorflow as tf
 
 from inpaint_model import InpaintCAModel
@@ -50,11 +50,9 @@ class GenerativeInpaintingWorker:
         self.grid = 8
         logger.info("Initialization done")
 
-    def infer(self, image, mask_bboxes):
-
-        start_time = time.time()
+    def _mask_bboxes_to_mask(self, image_shape, mask_bboxes):
         try:
-            mask = Image.new("RGB", (image.shape[1], image.shape[0]))
+            mask = Image.new("RGB", image_shape)
             for i, mask_bbox in mask_bboxes.items():
                 x1, y1, x2, y2 = mask_bbox
                 mask_shape = (x2 - x1, y2 - y1)
@@ -66,13 +64,26 @@ class GenerativeInpaintingWorker:
             import pdb
             pdb.set_trace()
             print("")
+        return mask
 
+    def _draw_bboxes(self, img, bboxes):
+        draw = ImageDraw.Draw(img)
+        for i, bbox in bboxes.items():
+            x1, y1, x2, y2 = bbox
+            draw.rectangle(((x1, y1), (x2, y2)), outline="red")
+        return img
+
+    def infer(self, image, mask_bboxes):
+
+        start_time = time.time()
+        h, w, _ = image.shape
+        logger.info(f"Shape: {image.shape}")
+
+        mask = self._mask_bboxes_to_mask((w, h), mask_bboxes)
         assert image.shape == mask.shape
 
-        h, w, _ = image.shape
         image = image[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
         mask = mask[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
-        logger.info(f"Shape: {image.shape}")
 
         image = np.expand_dims(image, 0)
         mask = np.expand_dims(mask, 0)
@@ -100,8 +111,9 @@ class GenerativeInpaintingWorker:
             result = sess.run(output)
 
             im = Image.fromarray(result[0])
+            result_image = self._draw_bboxes(im, mask_bboxes)
             with io.BytesIO() as buf:
-                im.save(buf, format="jpeg")
+                result_image.save(buf, format="jpeg")
                 buf.seek(0)
                 encoded_string = base64.b64encode(buf.read())
                 encoded_result_image = (
