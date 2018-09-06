@@ -3,11 +3,12 @@ import logging
 import base64
 import io
 import time
+import json
 
 from flask import Flask, request, jsonify
 import numpy as np
 from flask_cors import CORS
-import neuralgym as ng
+# import neuralgym as ng
 from PIL import Image
 import tensorflow as tf
 
@@ -49,15 +50,16 @@ class GenerativeInpaintingWorker:
         self.grid = 8
         logger.info("Initialization done")
 
-    def infer(self, image, mask_bbox):
+    def infer(self, image, mask_bboxes):
 
         start_time = time.time()
         try:
-            x1, y1, x2, y2 = mask_bbox
-            mask_shape = (x2 - x1, y2 - y1)
             mask = Image.new("RGB", (image.shape[1], image.shape[0]))
-            mask_fg = Image.new("RGB", mask_shape, (255, 255, 255))
-            mask.paste(mask_fg, (x1, y1))
+            for i, mask_bbox in mask_bboxes.items():
+                x1, y1, x2, y2 = mask_bbox
+                mask_shape = (x2 - x1, y2 - y1)
+                mask_fg = Image.new("RGB", mask_shape, (255, 255, 255))
+                mask.paste(mask_fg, (x1, y1))
             mask = np.array(mask)[:, :, ::-1].copy()
         except Exception as err:
             logger.info(err, exc_info=True)
@@ -124,20 +126,18 @@ def hi():
 def generative_inpainting():
     try:
         image_file = request.files['pic']
-        mask_file = request.files['pic']
+        mask_bboxes = json.loads(request.values['bboxes'])
     except Exception as err:
         logger.error(str(err), exc_info=True)
         raise InvalidUsage(
             f"{err}: request {request} "
             "has no files['raw']"
         )
-    if image_file is None or mask_file is None:
+    if image_file is None or mask_bboxes is None:
         raise InvalidUsage('There is no iamge')
     try:
         image = np.array(
             Image.open(image_file).convert("RGB"))[:, :, ::-1].copy()
-        mask = np.array(
-            Image.open(mask_file).convert('RGB'))[:, :, ::-1].copy()
     except Exception as err:
         logger.error(str(err), exc_info=True)
         raise InvalidUsage(
@@ -146,7 +146,7 @@ def generative_inpainting():
         )
     try:
         result = gi_worker.infer(
-            image, (100, 100, 300, 300)
+            image, mask_bboxes
         )
     except Exception as err:
         logger.error(str(err), exc_info=True)
