@@ -1,13 +1,14 @@
 import argparse
 import logging
 import base64
+import io
 import time
 
 from flask import Flask, request, jsonify
 import numpy as np
 from flask_cors import CORS
 import neuralgym as ng
-import cv2
+from PIL import Image
 import tensorflow as tf
 
 from inpaint_model import InpaintCAModel
@@ -22,9 +23,20 @@ logger = logging.getLogger(__name__)
 
 def get_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--image', default='', type=str,
+                        help='The filename of image to be completed.')
+    parser.add_argument('--mask', default='', type=str,
+                        help='The filename of mask, value 255 indicates mask.')
+    parser.add_argument('--output', default='output.png', type=str,
+                        help='Where to write output.')
     parser.add_argument('--checkpoint_dir', default='', type=str,
                         help='The directory of tensorflow checkpoint.')
     return parser.parse_args()
+
+
+sess_config = tf.ConfigProto()
+sess_config.gpu_options.allow_growth = True
+sess = tf.InteractiveSession(config=sess_config)
 
 
 class GenerativeInpaintingWorker:
@@ -35,16 +47,40 @@ class GenerativeInpaintingWorker:
         self.args = get_args()
         self.model = InpaintCAModel()
         self.grid = 8
-        sess_config = tf.ConfigProto()
-        sess_config.gpu_options.allow_growth = True
-        self.sess = tf.Session(config=sess_config)
-        self._load_model()
         logger.info("Initialization done")
 
-    def _load_model(self):
-        with self.sess:
-            input_placeholder = tf.placeholder(tf.float32)
-            self.model.build_server_graph(input_placeholder)
+    def infer(self, image, mask):
+
+        start_time = time.time()
+        try:
+            mask = Image.open(self.args.mask).convert('RGB').resize(
+                (image.shape[1], image.shape[0]))
+            mask = np.array(mask)[:, :, ::-1].copy()
+        except Exception as err:
+            logger.info(err, exc_info=True)
+            import pdb
+            pdb.set_trace()
+
+        assert image.shape == mask.shape
+
+        h, w, _ = image.shape
+        image = image[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
+        mask = mask[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
+        logger.info(f"Shape: {image.shape}")
+
+        image = np.expand_dims(image, 0)
+        mask = np.expand_dims(mask, 0)
+        input_image = np.concatenate([image, mask], axis=2)
+
+        sess_config = tf.ConfigProto()
+        sess_config.gpu_options.allow_growth = True
+        with tf.Session(config=sess_config) as sess:
+            input_image = tf.constant(input_image, dtype=tf.float32)
+            output = self.model.build_server_graph(input_image)
+            output = (output + 1.) * 127.5
+            output = tf.reverse(output, [-1])
+            output = tf.saturate_cast(output, tf.uint8)
+
             # load pretrained model
             vars_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
             assign_ops = []
@@ -54,37 +90,19 @@ class GenerativeInpaintingWorker:
                 var_value = tf.contrib.framework.load_variable(
                     self.args.checkpoint_dir, from_name)
                 assign_ops.append(tf.assign(var, var_value))
-            self.sess.run(assign_ops)
-            logger.info('Model loaded.')
+            sess.run(assign_ops)
+            result = sess.run(output)
 
-    def infer(self, image, mask):
-
-        start_time = time.time()
-
-        assert image.shape == mask.shape
-
-        h, w, _ = image.shape
-        image = image[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
-        mask = mask[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
-
-        image = np.expand_dims(image, 0)
-        mask = np.expand_dims(mask, 0)
-
-        input_image = np.concatenate([image, mask], axis=2)
-        input_image = tf.constant(input_image, dtype=tf.float32)
-        output = self.model.build_server_graph(input_image)
-        output = (output + 1.) * 127.5
-        output = tf.reverse(output, [-1])
-        output = tf.saturate_cast(output, tf.uint8)
-
-        result = self.sess.run(output)
-        buf = cv2.imencode(".jpg", result[0][:, :, ::-1])[1]
-        encoded_string = base64.b64encode(buf)
-        encoded_result_image = (
-            b'data:image/jpeg;base64,' + encoded_string
-        )
-        logger.info("Infer time: {}".format(time.time() - start_time))
-        return encoded_result_image
+            im = Image.fromarray(result[0])
+            with io.BytesIO() as buf:
+                im.save(buf, format="jpeg")
+                buf.seek(0)
+                encoded_string = base64.b64encode(buf.read())
+                encoded_result_image = (
+                    b'data:image/jpeg;base64,' + encoded_string
+                )
+                logger.info("Infer time: {}".format(time.time() - start_time))
+                return encoded_result_image
 
 
 app = Flask(__name__)
@@ -101,8 +119,8 @@ def hi():
 @app.route('/gi', methods=['POST'])
 def generative_inpainting():
     try:
-        image_file = request.files['image']
-        mask_file = request.files['mask']
+        image_file = request.files['pic']
+        mask_file = request.files['pic']
     except Exception as err:
         logger.error(str(err), exc_info=True)
         raise InvalidUsage(
@@ -112,8 +130,10 @@ def generative_inpainting():
     if image_file is None or mask_file is None:
         raise InvalidUsage('There is no iamge')
     try:
-        image = cv2.imread(image_file)
-        mask = cv2.imread(mask_file)
+        image = np.array(
+            Image.open(image_file).convert("RGB"))[:, :, ::-1].copy()
+        mask = np.array(
+            Image.open(mask_file).convert('RGB'))[:, :, ::-1].copy()
     except Exception as err:
         logger.error(str(err), exc_info=True)
         raise InvalidUsage(
