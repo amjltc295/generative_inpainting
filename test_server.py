@@ -43,23 +43,27 @@ class GenerativeInpaintingWorker:
 
     def __init__(self):
         logger.info("Initializing ..")
-        ng.get_gpus(1)
+        # ng.get_gpus(1)
         self.args = get_args()
         self.model = InpaintCAModel()
         self.grid = 8
         logger.info("Initialization done")
 
-    def infer(self, image, mask):
+    def infer(self, image, mask_bbox):
 
         start_time = time.time()
         try:
-            mask = Image.open(self.args.mask).convert('RGB').resize(
-                (image.shape[1], image.shape[0]))
+            x1, y1, x2, y2 = mask_bbox
+            mask_shape = (x2 - x1, y2 - y1)
+            mask = Image.new("RGB", (image.shape[1], image.shape[0]))
+            mask_fg = Image.new("RGB", mask_shape, (255, 255, 255))
+            mask.paste(mask_fg, (x1, y1))
             mask = np.array(mask)[:, :, ::-1].copy()
         except Exception as err:
             logger.info(err, exc_info=True)
             import pdb
             pdb.set_trace()
+            print("")
 
         assert image.shape == mask.shape
 
@@ -142,7 +146,7 @@ def generative_inpainting():
         )
     try:
         result = gi_worker.infer(
-            image, mask
+            image, (100, 100, 300, 300)
         )
     except Exception as err:
         logger.error(str(err), exc_info=True)
