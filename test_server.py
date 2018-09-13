@@ -11,6 +11,7 @@ from flask_cors import CORS
 # import neuralgym as ng
 from PIL import Image, ImageDraw
 import tensorflow as tf
+import pycocotools.mask as mask_util
 
 from inpaint_model import InpaintCAModel
 
@@ -66,6 +67,19 @@ class GenerativeInpaintingWorker:
             print("")
         return mask
 
+    def _segms_to_mask(self, image_shape, segms):
+        try:
+            masks = mask_util.decode(segms)
+            mask = (masks * 255).sum(axis=2).astype(np.int8)
+            mask = Image.fromarray(mask).convert("RGB")
+            mask = np.array(mask)[:, :, ::-1].copy()
+        except Exception as err:
+            logger.info(err, exc_info=True)
+            import pdb
+            pdb.set_trace()
+            print("")
+        return mask
+
     def _draw_bboxes(self, img, bboxes):
         draw = ImageDraw.Draw(img)
         for i, bbox in bboxes.items():
@@ -73,14 +87,17 @@ class GenerativeInpaintingWorker:
             draw.rectangle(((x1, y1), (x2, y2)), outline="red")
         return img
 
-    def infer(self, image, mask_bboxes):
+    def infer(self, image, mask_bboxes, use_mask, segms):
 
         start_time = time.time()
         h, w, _ = image.shape
         logger.info(f"Shape: {image.shape}")
 
-        mask = self._mask_bboxes_to_mask((w, h), mask_bboxes)
-        assert image.shape == mask.shape
+        if not use_mask:
+            mask = self._mask_bboxes_to_mask((w, h), mask_bboxes)
+        else:
+            mask = self._segms_to_mask((w, h), segms)
+        assert image.shape == mask.shape, f"{image.shape} vs {mask.shape}"
 
         image = image[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
         mask = mask[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
@@ -139,6 +156,8 @@ def generative_inpainting():
     try:
         image_file = request.files['pic']
         mask_bboxes = json.loads(request.values['bboxes'])
+        use_mask = json.loads(request.values['use_mask'])
+        segms = json.loads(request.values['segms'])
     except Exception as err:
         logger.error(str(err), exc_info=True)
         raise InvalidUsage(
@@ -158,7 +177,7 @@ def generative_inpainting():
         )
     try:
         result = gi_worker.infer(
-            image, mask_bboxes
+            image, mask_bboxes, use_mask, segms
         )
     except Exception as err:
         logger.error(str(err), exc_info=True)
