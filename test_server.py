@@ -58,7 +58,7 @@ class GenerativeInpaintingWorker:
             mask = Image.new("RGB", image_shape)
             for i, mask_bbox in enumerate(mask_bboxes):
                 if classes[i] in target_classes and mask_bbox[4] > threshold:
-                    x1, y1, x2, y2 = mask_bbox
+                    x1, y1, x2, y2, _ = mask_bbox
                     mask_shape = (x2 - x1, y2 - y1)
                     mask_fg = Image.new("RGB", mask_shape, (255, 255, 255))
                     mask.paste(mask_fg, (x1, y1))
@@ -103,7 +103,8 @@ class GenerativeInpaintingWorker:
 
     def infer(
         self, image, mask_bboxes, use_mask,
-        segms, classes, target_classes, threshold
+        segms, classes, target_classes, threshold,
+        draw_bbox=False
     ):
 
         start_time = time.time()
@@ -120,12 +121,12 @@ class GenerativeInpaintingWorker:
             )
         assert image.shape == mask.shape, f"{image.shape} vs {mask.shape}"
 
-        image = image[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
+        image_ = image[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
         mask = mask[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
 
-        image = np.expand_dims(image, 0)
+        image_ = np.expand_dims(image_, 0)
         mask = np.expand_dims(mask, 0)
-        input_image = np.concatenate([image, mask], axis=2)
+        input_image = np.concatenate([image_, mask], axis=2)
 
         sess_config = tf.ConfigProto()
         sess_config.gpu_options.allow_growth = True
@@ -148,8 +149,14 @@ class GenerativeInpaintingWorker:
             sess.run(assign_ops)
             result = sess.run(output)
 
-            im = Image.fromarray(result[0])
-            result_image = self._draw_bboxes(im, mask_bboxes, threshold)
+            result_image = image.copy()
+            result_image[
+                :h//self.grid*self.grid, :w//self.grid*self.grid, :
+            ] = result[0]
+            result_image = Image.fromarray(result_image)
+            if draw_bbox:
+                result_image = self._draw_bboxes(
+                    result_image, mask_bboxes, threshold)
             with io.BytesIO() as buf:
                 result_image.save(buf, format="jpeg")
                 buf.seek(0)
