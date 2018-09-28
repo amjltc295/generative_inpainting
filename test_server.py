@@ -51,14 +51,17 @@ class GenerativeInpaintingWorker:
         self.grid = 8
         logger.info("Initialization done")
 
-    def _mask_bboxes_to_mask(self, image_shape, mask_bboxes):
+    def _mask_bboxes_to_mask(
+        self, image_shape, mask_bboxes, classes, target_classes, threshold
+    ):
         try:
             mask = Image.new("RGB", image_shape)
-            for i, mask_bbox in mask_bboxes.items():
-                x1, y1, x2, y2 = mask_bbox
-                mask_shape = (x2 - x1, y2 - y1)
-                mask_fg = Image.new("RGB", mask_shape, (255, 255, 255))
-                mask.paste(mask_fg, (x1, y1))
+            for i, mask_bbox in enumerate(mask_bboxes):
+                if classes[i] in target_classes and mask_bbox[4] > threshold:
+                    x1, y1, x2, y2 = mask_bbox
+                    mask_shape = (x2 - x1, y2 - y1)
+                    mask_fg = Image.new("RGB", mask_shape, (255, 255, 255))
+                    mask.paste(mask_fg, (x1, y1))
             mask = np.array(mask)[:, :, ::-1].copy()
         except Exception as err:
             logger.info(err, exc_info=True)
@@ -67,11 +70,20 @@ class GenerativeInpaintingWorker:
             print("")
         return mask
 
-    def _segms_to_mask(self, image_shape, segms):
+    def _segms_to_mask(
+        self, image_shape, mask_bboxes,
+        segms, classes, target_classes, threshold
+    ):
         try:
-            masks = mask_util.decode(segms)
-            mask = (masks * 255).sum(axis=2).astype(np.int8)
-            mask = Image.fromarray(mask).convert("RGB")
+            segms = mask_util.decode(segms)
+            mask = Image.new("RGB", image_shape)
+            for i in range(segms.shape[-1]):
+                segm = segms[:, :, i]
+                if (classes[i] in target_classes
+                        and mask_bboxes[i][4] > threshold):
+                    segm = (segm * 255).astype(np.int8)
+                    segm = Image.fromarray(segm).convert("RGB")
+                    mask.paste(segm, (0, 0))
             mask = np.array(mask)[:, :, ::-1].copy()
         except Exception as err:
             logger.info(err, exc_info=True)
@@ -80,23 +92,32 @@ class GenerativeInpaintingWorker:
             print("")
         return mask
 
-    def _draw_bboxes(self, img, bboxes):
+    def _draw_bboxes(self, img, bboxes, th):
         draw = ImageDraw.Draw(img)
-        for i, bbox in bboxes.items():
-            x1, y1, x2, y2 = bbox
-            draw.rectangle(((x1, y1), (x2, y2)), outline="red")
+        for i, bbox in enumerate(bboxes):
+            score = bbox[4]
+            x1, y1, x2, y2 = map(int, bbox[:4])
+            if score > th:
+                draw.rectangle(((x1, y1), (x2, y2)), outline="red")
         return img
 
-    def infer(self, image, mask_bboxes, use_mask, segms):
+    def infer(
+        self, image, mask_bboxes, use_mask,
+        segms, classes, target_classes, threshold
+    ):
 
         start_time = time.time()
         h, w, _ = image.shape
         logger.info(f"Shape: {image.shape}")
 
         if not use_mask:
-            mask = self._mask_bboxes_to_mask((w, h), mask_bboxes)
+            mask = self._mask_bboxes_to_mask(
+                (w, h), mask_bboxes, classes, target_classes, threshold
+            )
         else:
-            mask = self._segms_to_mask((w, h), segms)
+            mask = self._segms_to_mask(
+                (w, h), mask_bboxes, segms, classes, target_classes, threshold
+            )
         assert image.shape == mask.shape, f"{image.shape} vs {mask.shape}"
 
         image = image[:h//self.grid*self.grid, :w//self.grid*self.grid, :]
@@ -128,7 +149,7 @@ class GenerativeInpaintingWorker:
             result = sess.run(output)
 
             im = Image.fromarray(result[0])
-            result_image = self._draw_bboxes(im, mask_bboxes)
+            result_image = self._draw_bboxes(im, mask_bboxes, threshold)
             with io.BytesIO() as buf:
                 result_image.save(buf, format="jpeg")
                 buf.seek(0)
@@ -158,6 +179,10 @@ def generative_inpainting():
         mask_bboxes = json.loads(request.values['bboxes'])
         use_mask = json.loads(request.values['use_mask'])
         segms = json.loads(request.values['segms'])
+        threshold = json.loads(request.values['threshold'])
+        classes = json.loads(request.values['classes'])
+        # target_classes = json.loads(request.value['target_classes'])
+        target_classes = [1]
     except Exception as err:
         logger.error(str(err), exc_info=True)
         raise InvalidUsage(
@@ -177,7 +202,8 @@ def generative_inpainting():
         )
     try:
         result = gi_worker.infer(
-            image, mask_bboxes, use_mask, segms
+            image, mask_bboxes, use_mask, segms, classes,
+            target_classes, threshold
         )
     except Exception as err:
         logger.error(str(err), exc_info=True)
