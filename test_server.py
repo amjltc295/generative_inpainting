@@ -158,11 +158,11 @@ class GenerativeInpaintingWorker:
                 result_image = self._draw_bboxes(
                     result_image, mask_bboxes, threshold)
             with io.BytesIO() as buf:
-                result_image.save(buf, format="jpeg")
+                result_image.save(buf, format="png")
                 buf.seek(0)
                 encoded_string = base64.b64encode(buf.read())
                 encoded_result_image = (
-                    b'data:image/jpeg;base64,' + encoded_string
+                    b'data:image/png;base64,' + encoded_string
                 )
                 logger.info("Infer time: {}".format(time.time() - start_time))
                 return encoded_result_image
