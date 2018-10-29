@@ -25,6 +25,8 @@ def get_args():
                         help='Image height')
     parser.add_argument('-ww', '--image_width', default=320, type=int,
                         help='Image width')
+    parser.add_argument('-p', '--port', default=8083, type=int,
+                        help='Port')
     parser.add_argument('-refine', '--refine', default=False,
                         action='store_true',
                         help='Do only stage 2')
@@ -51,11 +53,10 @@ def generative_inpainting_refine():
         bboxes = json.loads(request.values['bboxes'])
         image_size = json.loads(request.values['image_size'])
         image_mode = json.loads(request.values['image_mode'])
-        image = np.array(
-            Image.frombytes(
-                image_mode, image_size, image_data
-            )
+        image = Image.frombytes(
+            image_mode, image_size, image_data
         )
+        image = np.array(image)
     except Exception as err:
         logger.error(str(err), exc_info=True)
         raise InvalidUsage(
@@ -154,4 +155,4 @@ if __name__ == '__main__':
         checkpoint_dir=args.checkpoint_dir,
         refine=args.refine
     )
-    app.run(host='0.0.0.0', port=8083)
+    app.run(host='0.0.0.0', port=args.port)
