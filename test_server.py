@@ -8,7 +8,7 @@ from flask_cors import CORS
 # import neuralgym as ng
 from PIL import Image
 
-from batch_infer import GenerativeInpaintingWorker
+from gi_worker import GenerativeInpaintingWorker
 
 
 logging.basicConfig(
@@ -25,6 +25,9 @@ def get_args():
                         help='Image height')
     parser.add_argument('-ww', '--image_width', default=320, type=int,
                         help='Image width')
+    parser.add_argument('-refine', '--refine', default=False,
+                        action='store_true',
+                        help='Do only stage 2')
     parser.add_argument('--checkpoint_dir',
                         default='model_logs/release_places2_256', type=str,
                         help='The directory of tensorflow checkpoint.')
@@ -39,6 +42,45 @@ CORS(app)
 def hi():
     return jsonify(
         {"message": "Hi! This is the generative_inpainting worker (new)."})
+
+
+@app.route('/gi_refine', methods=['POST'])
+def generative_inpainting_refine():
+    try:
+        image_data = json.loads(request.values['image']).encode('latin-1')
+        bboxes = json.loads(request.values['bboxes'])
+        image_size = json.loads(request.values['image_size'])
+        image_mode = json.loads(request.values['image_mode'])
+        image = np.array(
+            Image.frombytes(
+                image_mode, image_size, image_data
+            )
+        )
+    except Exception as err:
+        logger.error(str(err), exc_info=True)
+        raise InvalidUsage(
+            f"{err}: request {request} "
+            "has no files['raw']"
+        )
+    except Exception as err:
+        logger.error(str(err), exc_info=True)
+        raise InvalidUsage(
+            f"{err}: request.files['raw'] {request.files['raw']} "
+            "could not be read by opencv"
+        )
+    try:
+        result = gi_worker.infer(
+            np.array([image]), np.array([bboxes])
+        )[0]
+        result = json.dumps(result.tobytes().decode('latin-1'))
+    except Exception as err:
+        logger.error(str(err), exc_info=True)
+        raise InvalidUsage(
+            f"{err}: request {request} "
+            "The server encounters some error to process this image",
+            status_code=500
+        )
+    return jsonify({'result': result})
 
 
 @app.route('/gi', methods=['POST'])
@@ -109,6 +151,7 @@ if __name__ == '__main__':
         logger,
         image_height=args.image_height,
         image_width=args.image_width,
-        checkpoint_dir=args.checkpoint_dir
+        checkpoint_dir=args.checkpoint_dir,
+        refine=args.refine
     )
     app.run(host='0.0.0.0', port=8083)
