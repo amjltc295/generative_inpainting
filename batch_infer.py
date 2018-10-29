@@ -9,18 +9,6 @@ import tensorflow as tf
 
 from inpaint_model import InpaintCAModel
 
-logging.basicConfig(
-    level=logging.INFO,
-    format=('[%(asctime)s] {%(filename)s:%(lineno)d} '
-            '%(levelname)s - %(message)s'),
-)
-logger = logging.getLogger(__name__)
-
-
-sess_config = tf.ConfigProto()
-sess_config.gpu_options.allow_growth = True
-sess = tf.Session(config=sess_config)
-
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -38,25 +26,31 @@ def get_args():
 class GenerativeInpaintingWorker:
 
     def __init__(
-        self, image_height=176, image_width=320,
+        self, logger=logging.getLogger(__name__),
+        image_height=180, image_width=320,
         checkpoint_dir='model_logs/release_places2_256'
     ):
-        logger.info("Initializing ..")
+        self.logger = logger
+        self.logger.info("Initializing ..")
         # ng.get_gpus(1)
 
         self.checkpoint_dir = checkpoint_dir
-        self.image_height = image_height
-        self.image_width = image_width
+        self.grid = 8
+        self.ph_height = image_height // self.grid * self.grid
+        self.ph_width = image_width // self.grid * self.grid * 2
         assert os.path.exists(self.checkpoint_dir)
 
+        self.sess_config = tf.ConfigProto()
+        self.sess_config.gpu_options.allow_growth = True
+        self.sess = tf.Session(config=self.sess_config)
+
         self._setup()
-        self.grid = 8
-        logger.info("Initialization done")
+        self.logger.info("Initialization done")
 
     def _setup(self):
         self.model = InpaintCAModel()
         self.input_image_ph = tf.placeholder(
-            tf.float32, shape=(1, self.image_height, self.image_width*2, 3))
+            tf.float32, shape=(1, self.ph_height, self.ph_width, 3))
         self.output = self.model.build_server_graph(self.input_image_ph)
         self.output = (self.output + 1.) * 127.5
         self.output = tf.reverse(self.output, [-1])
@@ -69,8 +63,8 @@ class GenerativeInpaintingWorker:
             var_value = tf.contrib.framework.load_variable(
                 self.checkpoint_dir, from_name)
             assign_ops.append(tf.assign(var, var_value))
-        sess.run(assign_ops)
-        logger.info('Model loaded.')
+        self.sess.run(assign_ops)
+        self.logger.info('Model loaded.')
 
     def _draw_bboxes(self, img, bboxes):
         draw = ImageDraw.Draw(img)
@@ -85,10 +79,16 @@ class GenerativeInpaintingWorker:
 
         start_time = time.time()
         h, w, _ = images[0].shape
-        logger.info(f"Shape: {images.shape}")
+        self.logger.info(f"Shape: {images.shape}")
 
         result_images = []
-        for image, bboxes in zip(images, bboxeses):
+        for i, (image, bboxes) in enumerate(zip(images, bboxeses)):
+            if len(bboxes) == 0:
+                result_image = Image.fromarray(
+                    image.astype('uint8'))
+                result_images.append(result_image)
+                self.logger.warning(f"No bboxes in frame {i}, skipped")
+                continue
             mask = np.zeros(image.shape)
             (x1, y1), (x2, y2) = bboxes[0]
             mask[y1:y2, x1:x2, :] = [255, 255, 255]
@@ -98,7 +98,7 @@ class GenerativeInpaintingWorker:
             image_ = np.expand_dims(image_, 0)
             mask = np.expand_dims(mask, 0)
             input_image = np.concatenate([image_, mask], axis=2)
-            result_np = sess.run(
+            result_np = self.sess.run(
                 self.output, feed_dict={self.input_image_ph: input_image})
             result = image.copy()
             result[
@@ -109,7 +109,7 @@ class GenerativeInpaintingWorker:
             if draw_bbox:
                 self._draw_bboxes(result_image, bboxes)
             result_images.append(result_image)
-        logger.info(f"Time: {time.time() - start_time}")
+        self.logger.info(f"Time: {time.time() - start_time}")
         return result_images
 
 
