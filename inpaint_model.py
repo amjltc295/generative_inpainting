@@ -109,7 +109,7 @@ class InpaintCAModel(Model):
         return x_stage1, x_stage2, offset_flow
 
     def build_inpaint_net_refine(
-        self, x, mask, config=None, reuse=False,
+        self, x, x1, mask, config=None, reuse=False,
         training=True, padding='SAME', name='inpaint_net'
     ):
         """Inpaint network stage 2.
@@ -154,9 +154,9 @@ class InpaintCAModel(Model):
             # return x_stage1, None, None
 
             # stage2, paste result as input
-            # x = xin
             # x = tf.stop_gradient(x)
-            x = x*mask + xin*(1.-mask)
+            # x = x*mask + xin*(1.-mask)
+            x = x1
             x.set_shape(xin.get_shape().as_list())
             # conv branch
             xnow = tf.concat([x, ones_x, ones_x*mask], axis=3)
@@ -393,7 +393,7 @@ class InpaintCAModel(Model):
         if refine:
             # inpaint
             x1, x2, flow = self.build_inpaint_net_refine(
-                batch_incomplete, masks, reuse=reuse, training=is_training,
+                batch_incomplete, batch_pos, masks, reuse=reuse, training=is_training,
                 config=None)
         else:
             # inpaint
