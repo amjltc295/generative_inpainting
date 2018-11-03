@@ -151,12 +151,14 @@ class InpaintCAModel(Model):
             x = gen_conv(x, 3, 3, 1, activation=None, name='conv17')
             x = tf.clip_by_value(x, -1., 1.)
             x_stage1 = x
+            self.stage1 = x
             # return x_stage1, None, None
 
             # stage2, paste result as input
             # x = tf.stop_gradient(x)
             # x = x*mask + xin*(1.-mask)
             x = x1
+            self.x1 = x1
             x.set_shape(xin.get_shape().as_list())
             # conv branch
             xnow = tf.concat([x, ones_x, ones_x*mask], axis=3)
@@ -194,6 +196,7 @@ class InpaintCAModel(Model):
             x = gen_conv(x, cnum//2, 3, 1, name='allconv16')
             x = gen_conv(x, 3, 3, 1, activation=None, name='allconv17')
             x_stage2 = tf.clip_by_value(x, -1., 1.)
+            self.x2_refine_only = x_stage2
         return x_stage1, x_stage2, offset_flow
 
     def build_wgan_local_discriminator(self, x, reuse=False, training=True):

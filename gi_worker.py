@@ -33,6 +33,7 @@ class GenerativeInpaintingWorker:
     ):
         self.logger = logger
         self.logger.info("Initializing ..")
+        self.refine = refine
         # ng.get_gpus(1)
 
         self.checkpoint_dir = checkpoint_dir
@@ -100,8 +101,23 @@ class GenerativeInpaintingWorker:
             image_ = np.expand_dims(image_, 0)
             mask = np.expand_dims(mask, 0)
             input_image = np.concatenate([image_, mask], axis=2)
-            result_np = self.sess.run(
-                self.output, feed_dict={self.input_image_ph: input_image})
+            if self.refine:
+                result_np, dump_x1, dump_x2_ro = self.sess.run(
+                    [self.output, self.model.x1, self.model.x2_refine_only],
+                    feed_dict={self.input_image_ph: input_image})
+                dump_img_o = Image.fromarray(
+                    result_np[0].astype('uint8')[:, :, ::-1])
+                dump_img_x1 = Image.fromarray(
+                    ((dump_x1+1)*127.5)[0].astype('uint8'))
+                dump_img_x2_ro = Image.fromarray(
+                    ((dump_x2_ro+1)*127.5)[0].astype('uint8'))
+                dump_img_o.save('debug_o.png')
+                dump_img_x1.save('debug_x1.png')
+                dump_img_x2_ro.save('debug_x2.png')
+            else:
+                result_np = self.sess.run(
+                    self.output,
+                    feed_dict={self.input_image_ph: input_image})
             result = image.copy()
             result[
                :h//self.grid*self.grid, :w//self.grid*self.grid, :
